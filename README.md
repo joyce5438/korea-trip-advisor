@@ -93,3 +93,98 @@
 - 原始出處不能只放在 README，也不能被延伸閱讀取代。
 
 後續提供文章連結時，依上述規則直接整理、比對並上傳。
+
+## Naver 部落格全文讀取：實測方法
+
+### 工具來源與用途
+
+- 專案來源：[tjdwls101010／Agentic-Blog](https://github.com/tjdwls101010/Agentic-Blog)
+- [原專案使用說明](https://github.com/tjdwls101010/Agentic-Blog/blob/main/README.md)
+- 本次實測版本：`0.3.0`。工具以 Python 指令讀取公開 Naver 部落格，支援搜尋、日期篩選與文章正文讀取，不需 Naver 帳號或 API 金鑰。
+- 用於查找近兩年的韓文食記，讀取全文後，將有價值的料理、口感、配菜與吃法細節自然融入既有文章。搜尋結果的摘要不等於已讀取全文。
+
+### 安裝
+
+需要 Python 3.11 以上版本。使用隔離環境安裝，避免影響其他工具：
+
+```bash
+git clone https://github.com/tjdwls101010/Agentic-Blog.git
+cd Agentic-Blog
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+python -m agentic_blog --version
+```
+
+若執行環境使用 SOCKS 代理，另安裝其依賴；不需改變既有代理設定：
+
+```bash
+python -m pip install 'httpx[socks]'
+```
+
+### 延長請求等待時間至 25 秒
+
+本次實測直接執行搜尋曾回傳 `ReadTimeout`；把 HTTP 請求逾時延長為 **25 秒** 後成功。以下包裝程式只延長等待時間，不修改原工具的請求間隔、數量限制或存取範圍。
+
+在原專案目錄建立 `run_naver_blog.py`：
+
+```python
+import sys
+import httpx
+from agentic_blog.cli import main
+
+_original_init = httpx.Client.__init__
+
+def _init_with_longer_timeout(self, *args, **kwargs):
+    kwargs.setdefault("timeout", 25.0)
+    _original_init(self, *args, **kwargs)
+
+httpx.Client.__init__ = _init_with_longer_timeout
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
+```
+
+這是本次驗證過的執行包裝方式，並非工具原生的 `--timeout` 參數。25 秒是 HTTP 等待設定，不是整個指令的總執行上限；外層執行環境也要允許足夠時間，指令仍在執行時應等待完成，不因數秒沒有輸出就判定失敗。
+
+### 搜尋與讀取全文
+
+先以韓文店名搜尋，日期隨當次執行日調整為近兩年，小量取得候選文章：
+
+```bash
+python run_naver_blog.py search '벙글벙글찜갈비' \
+  --since 2024-10-26 --until 2026-10-26 \
+  --limit 3 --output /tmp/naver-search.json
+```
+
+搜尋結果包含 `blog_id`、`log_no`、標題、日期與 `brief` 摘要。使用其中的部落格 ID 與文章編號讀取全文；不要把搜尋結果中只有部落格首頁的 `url` 當成文章網址：
+
+```bash
+python run_naver_blog.py post sun_38_ 224452612956 \
+  --no-comments --output /tmp/naver-post.json
+```
+
+也可將完整文章網址傳給 `post`。本次未取留言，僅讀正文。
+
+檢查結果是否真的包含正文：
+
+```python
+import json
+
+with open("/tmp/naver-post.json", encoding="utf-8") as f:
+    post = json.load(f)[0]
+
+body = post.get("body") or ""
+print(post.get("title"))
+print("正文長度：", len(body))
+print(body)
+```
+
+### 實測結果與寫作銜接
+
+- 以蹦蹦燉排骨搜尋成功取得 3 篇近期 Naver 文章。
+- 完整讀取文章 `sun_38_／224452612956`，發布於 2026-10-24，正文約 7,200 字元；這是實際全文讀取，不是搜尋摘要。
+- 實測文章：[大邱東仁洞蹦蹦燉排骨食記](https://blog.naver.com/sun_38_/224452612956)。
+- 全文取得後，先分辨食客感受、當次配菜、固定料理手法與菜單資訊，再把可用細節融入文章；單次食記的服務或配菜不擴大寫成永久保證。
+- 本次已將脫骨口感、酸蘿蔔與白泡菜搭配、剩醬炒飯等細節融入蹦蹦燉排骨原檔，不新增重複檔案。
+- 工具輸出是研究用中間資料，不將全文、圖片連結或原始 JSON 上傳到旅遊文章專案；文章維持不放圖片、不顯示更新日期的規則。
